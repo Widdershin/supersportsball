@@ -1,9 +1,14 @@
-import { run } from '@cycle/run';
-import { makeDOMDriver, h, DOMSource, VNode } from '@cycle/dom';
-import { timeDriver, TimeSource } from '@cycle/time';
-import xs, { Stream } from 'xstream';
+import { run } from "@cycle/run";
+import { makeDOMDriver, h, DOMSource, VNode } from "@cycle/dom";
+import { timeDriver, TimeSource } from "@cycle/time";
+import { Frame } from "@cycle/time/dist/animation-frames";
+import xs, { Stream } from "xstream";
+
+import { Vector, add } from "./vector";
 
 const TILE_SIZE = 48; // px
+const tileSize = {x: TILE_SIZE, y: TILE_SIZE};
+const GRAVITY = 0.98; // m/s
 
 interface ISources {
   DOM: DOMSource;
@@ -18,17 +23,25 @@ interface ISinks {
 //
 // let's start by defining the level
 
+interface Box {
+  position: Vector;
+  size: Vector;
+}
+
+function checkCollision(a: Box, b: Box): boolean {
+  return (
+    a.position.x < b.position.x + b.size.x &&
+    a.position.x + a.size.x > b.position.x &&
+    a.position.y < b.position.y + b.size.y &&
+    a.size.y + a.position.y > b.position.y
+  );
+}
 interface Tile {
   solid: boolean;
   position: Vector;
 }
 
 type Level = Tile[][];
-
-interface Vector {
-  x: number;
-  y: number;
-}
 
 interface Player {
   id: string;
@@ -56,12 +69,12 @@ const level = `
 *          ******           *
 *                           *
 ******                 ******
-*                           *
+* 1                         *
 *          ******           *
 *                           *
 *    *****        *****     *
 *                           *
-* 1           o          2  *
+*             o          2  *
 *****************************
 `;
 
@@ -69,31 +82,31 @@ function loadLevel(levelString: string): GameState {
   const players: Player[] = [];
   let ball: Ball = { position: { x: 0, y: 0 }, velocity: { x: 0, y: 0 } };
 
-  const level = levelString.split('\n').map((line, row) =>
-    line.split('').map((character, column) => {
+  const level = levelString.split("\n").map((line, row) =>
+    line.split("").map((character, column) => {
       const position = { y: row * TILE_SIZE, x: column * TILE_SIZE };
 
-      if (character === '1') {
+      if (character === "1") {
         players.push({
           id: Math.random().toString(),
-          name: 'Player 1',
+          name: "Player 1",
           position,
           velocity: { x: 0, y: 0 },
-          color: 'blue'
+          color: "lightblue"
         });
       }
 
-      if (character === '2') {
+      if (character === "2") {
         players.push({
           id: Math.random().toString(),
-          name: 'Player 2',
+          name: "Player 2",
           position,
           velocity: { x: 0, y: 0 },
-          color: 'red'
+          color: "pink"
         });
       }
 
-      if (character === 'o') {
+      if (character === "o") {
         ball = {
           position,
           velocity: { x: 0, y: 0 }
@@ -102,7 +115,7 @@ function loadLevel(levelString: string): GameState {
 
       return {
         position,
-        solid: character === '*'
+        solid: character === "*"
       };
     })
   );
@@ -119,7 +132,7 @@ function flatten<T>(array: T[][]): T[] {
 }
 
 function renderTile(tile: Tile): VNode {
-  return h('rect', {
+  return h("rect", {
     attrs: {
       x: tile.position.x,
       y: tile.position.y,
@@ -127,13 +140,13 @@ function renderTile(tile: Tile): VNode {
       width: TILE_SIZE,
       height: TILE_SIZE,
 
-      fill: tile.solid ? 'black' : 'white'
+      fill: !tile.solid ? "#222" : "lightgray"
     }
   });
 }
 
 function renderPlayer(player: Player): VNode {
-  return h('rect', {
+  return h("rect", {
     attrs: {
       x: player.position.x,
       y: player.position.y,
@@ -150,21 +163,21 @@ function renderPlayer(player: Player): VNode {
 }
 
 function renderBall(ball: Ball): VNode {
-  return h('circle', {
+  return h("circle", {
     attrs: {
       cx: ball.position.x,
       cy: ball.position.y,
 
       r: TILE_SIZE / 3,
 
-      fill: 'gray'
+      fill: "gray"
     }
   });
 }
 
 function view(state: GameState): VNode {
   return h(
-    'svg',
+    "svg",
     { attrs: { width: window.innerWidth, height: window.innerHeight } },
     [
       ...flatten(state.level.map(row => row.map(renderTile))),
@@ -174,10 +187,38 @@ function view(state: GameState): VNode {
   );
 }
 
+function updatePlayer(level: Level, player: Player, frame: Frame): Player {
+  player.velocity.y += 0.98 / 20 * frame.normalizedDelta;
+  const nextPosition = add(player.position, player.velocity);
+
+  const collision = flatten(level).filter(tile => tile.solid)
+    .find(tile => checkCollision({position: tile.position, size: tileSize}, {position: player.position, size: tileSize}));
+
+  if (collision) {
+    return player;
+  }
+
+  return {
+    ...player,
+
+    position: nextPosition
+  };
+}
+
+function updateGameState(state: GameState, frame: Frame): GameState {
+  return {
+    ...state,
+
+    players: state.players.map(player => updatePlayer(state.level, player, frame))
+  };
+}
+
 function main(sources: ISources): ISinks {
   const initialState = loadLevel(level);
 
-  const state$ = xs.of(initialState);
+  const state$ = sources.Time
+    .animationFrames()
+    .fold(updateGameState, initialState);
 
   return {
     DOM: state$.map(view)
